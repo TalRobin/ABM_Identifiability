@@ -1,0 +1,260 @@
+% For figures 4 and 5
+% Get trajectories of Nosocomial and imported colonizations
+% Simulate intervention
+
+clear all
+close all
+
+File_Name="Imp_and_Pos.mat";
+
+num_ens=300; % No. of repetitions  
+IntP=0.05; % probability to be colonized on day 0
+tmstep=14; % No. of days in a time step
+num_space=4; %No. of parameter sets to compare
+
+b=0.06; a=-1.03; %line coefficients from figure 3
+
+% points allong the ridge:
+Gammas=linspace(0.03,(10^-3-b)/a,num_space)';
+Betas=b+a*Gammas;
+
+% create parameter bank: ==================================================
+
+VarNames={'Beta','Gamma','Alpha','Rho'};
+num_var=size(VarNames,2);
+Vars_bank=array2table(zeros(num_space,num_var),'VariableNames',VarNames);
+Vars_bank.Beta=Betas; %Baseline transmission rate, Per day
+Vars_bank.Gamma=Gammas; %Importation rate, Per admission
+Vars_bank.Alpha(:)=1.5/365; %Patient decolonization rate, Per day
+Vars_bank.Rho(:)=0.0160; %Observation rate, Per day
+%==========================================================================
+
+
+% load network %===========================================================
+load('../NY_Network_1.mat');
+Days=Network.Days;
+NPat=Network.NPat;
+NDays=Network.NDays;
+day0=Network.day0; %date can be retrived by day+day0
+
+
+RPos=cumsum(Network.daypos.positives);
+RPos=diff(RPos(1:tmstep:end));
+clear Network
+%==========================================================================
+
+%timesteps: ===============================================================
+ts=(1:tmstep:NDays)';
+num_times=length(ts)-1;
+
+Burntime=15;
+IntTime=50; % the time step in which implemintation begines
+IntRate=0.3; % the ratio by which implamintation reduces nos infection rate
+%==========================================================================
+
+%initialize table: --------------------------------------------------------
+%in case simulation was interupted. If simulation was completed it will
+%skip the simulation and go straight to plot
+if exist(File_Name,'file') 
+    load(File_Name)
+else
+    Scan=table;
+end
+%--------------------------------------------------------------------------
+
+% Run simulation ==========================================================
+for v=height(Scan)+1:num_space %for each parameter set
+    Vars=Vars_bank(v,:);
+
+    P_status=rand(NPat,num_ens)<IntP; %initialize patient status
+    Pos=zeros(num_times,num_ens); % positive for each timestep/ parameter-set
+    Nos=zeros(num_times,num_ens); % nosocomial colonizations
+    Imp=zeros(num_times,num_ens); % imported colonizations
+    
+    % run simulation without intervention until IntTime -------------------
+    for t=1:IntTime
+        tic()
+                [P_status,Pos(t,:),Nos(t,:),Imp(t,:)] = ...
+                    Progress_ImpPos_uniform(Days(ts(t):ts(t+1)),P_status,Vars);
+
+                disp(['t=',num2str(t), ' duration:', num2str(toc())])
+    end
+    %----------------------------------------------------------------------
+    
+    % Intervention reduces nosocomial transmition:
+    Vars2=Vars;
+    Vars2.Beta=Vars.Beta.*IntRate;
+
+    P_status2=P_status;
+    Pos2=Pos; Nos2=Nos; Imp2=Imp;
+
+    %run simulation with and w/o intervention simultaneously---------------
+    for t=IntTime+1:num_times
+        tic()
+                % without intervention:
+                [P_status,Pos(t,:),Nos(t,:),Imp(t,:)] = ...
+                    Progress_ImpPos_uniform(Days(ts(t):ts(t+1)),P_status,Vars);
+                % with intervention:
+                [P_status2,Pos2(t,:),Nos2(t,:),Imp2(t,:)] = ...
+                    Progress_ImpPos_uniform(Days(ts(t):ts(t+1)),P_status2,Vars2);
+
+                disp(['t=',num2str(t), ' duration:', num2str(toc())])
+    end
+    %----------------------------------------------------------------------
+
+    %save simulation in a structure: --------------------------------------
+    Scan.Beta(v)=Vars.Beta;
+    Scan.Gamma(v)=Vars.Gamma;
+    Scan.Alpha(v)=Vars.Alpha;
+    Scan.Rho(v)=Vars.Rho;
+    Scan.Pos(v)={Pos};
+    Scan.Nos(v)={Nos};
+    Scan.Imp(v)={Imp};
+
+    Scan.Pos2(v)={Pos2};
+    Scan.Nos2(v)={Nos2};
+    Scan.Imp2(v)={Imp2};
+
+    save(File_Name,'Scan')
+    %----------------------------------------------------------------------
+end
+
+
+colors={'#0072BD','#D95319','#77AC30', '#A2142F', '#7E2F8E'}; %(blue, orange, grean, red, purple)
+colors2={[26,110,220],[220,149,27],[49,196,88],[158,93,145]};
+shapes=['o','d','^','h'];
+
+%Plotting: ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+figure(4) %================================================================
+tiledlayout(1,3)
+%Panel A - Positives ------------------------------------------------------
+nexttile
+hold on
+x=day0+(tmstep:tmstep:tmstep*num_times);
+for e=1:height(Scan)
+    temp=Scan.Pos{e,1};
+    M=mean(temp,2);
+    M95=prctile(temp,95,2);
+    M05=prctile(temp,5,2);
+    plot(x,M,Color=colors{e},LineWidth=2);
+    fill([x, x(end:-1:1)],[M95; M05(end:-1:1)],colors2{e}./255,FaceAlpha=0.1,EdgeAlpha=0.2);    
+end
+
+plot(x,RPos,'k',LineWidth=1)
+
+title('Positives')
+xlabel('date')
+ylabel('Positives')
+legend(['\beta=',num2str(Scan.Beta(1),2),'; \gamma=', num2str(Scan.Gamma(1),2)],'',...
+       ['\beta=',num2str(Scan.Beta(2),2),'; \gamma=', num2str(Scan.Gamma(2),2)],'',...
+       ['\beta=',num2str(Scan.Beta(3),2),'; \gamma=', num2str(Scan.Gamma(3),2)],'',...
+       ['\beta=',num2str(Scan.Beta(4),2),'; \gamma=', num2str(Scan.Gamma(4),2)],...
+       Location='southwest')
+legend('boxoff')
+set(gca,'FontSize',16,'FontName','Times New Roman' )
+xlim([x(Burntime),x(end)])
+ylim([0,37])
+%--------------------------------------------------------------------------
+
+%Panel B - Colonized ------------------------------------------------------
+nexttile
+hold on
+x=day0+(tmstep:tmstep:tmstep*num_times);
+for e=1:height(Scan)
+    temp=Scan.Nos{e,1}+Scan.Imp{e,1};
+    M=mean(temp,2);
+    M95=prctile(temp,95,2);
+    M05=prctile(temp,5,2);
+    plot(x,M,Color=colors{e},LineWidth=2);
+    fill([x, x(end:-1:1)],[M95; M05(end:-1:1)],colors2{e}./255,FaceAlpha=0.1,EdgeAlpha=0.2);
+end
+
+ylim([0,200])
+xlim([x(Burntime),x(end)])
+plot(0,0,':w')
+title('Colonized')
+xlabel('date')
+ylabel('Colonized')
+set(gca,'FontSize',17,'FontName','Times New Roman' )
+
+%--------------------------------------------------------------------------
+
+%Panel C - Importation ratio ----------------------------------------------
+nexttile 
+hold on
+x=day0+(tmstep:tmstep:tmstep*num_times);
+for e=1:height(Scan)
+    temp=Scan.Imp{e,1}./(Scan.Nos{e,1}+Scan.Imp{e,1});
+    M=mean(temp,2);
+    M95=prctile(temp,95,2);
+    M05=prctile(temp,5,2);
+    plot(x,M,Color=colors{e},LineWidth=2);
+    fill([x, x(end:-1:1)],[M95; M05(end:-1:1)],colors2{e}./255,FaceAlpha=0.1,EdgeAlpha=0.2);
+end
+
+ylim([0.5,1])
+xlim([x(Burntime),x(end)])
+plot(0,0,':w')
+title('Importation ratio')
+xlabel('date')
+ylabel('Importation ratio')
+set(gca,'FontSize',17,'FontName','Times New Roman' )
+%--------------------------------------------------------------------------
+
+set(gcf,'position',[0,100,1300,500])
+%==========================================================================
+
+figure(5) %================================================================
+tiledlayout(1,2)
+%Panel A - Positives with intervention ------------------------------------
+nexttile
+hold on
+x=day0+(tmstep:tmstep:tmstep*num_times);
+for e=1:height(Scan)
+    temp=Scan.Pos{e,1};
+    M=mean(temp,2);
+    plot(x,M,Color=colors{e},LineWidth=2);
+    
+    temp=Scan.Pos2{e,1};
+    M=mean(temp,2);
+    plot(x,M,':',Color=colors{e},LineWidth=2);
+end
+plot(0,0,':w')
+
+title('Positives')
+xlabel('date')
+ylabel('Positives')
+legend(['\beta=',num2str(Scan.Beta(1),2),'; \gamma=', num2str(Scan.Gamma(1),2)],'',...
+       ['\beta=',num2str(Scan.Beta(2),2),'; \gamma=', num2str(Scan.Gamma(2),2)],'',...
+       ['\beta=',num2str(Scan.Beta(3),2),'; \gamma=', num2str(Scan.Gamma(3),2)],'',...
+       ['\beta=',num2str(Scan.Beta(4),2),'; \gamma=', num2str(Scan.Gamma(4),2)],...
+       Location='southwest')
+legend('boxoff')
+set(gca,'FontSize',16,'FontName','Times New Roman' )
+xlim([x(Burntime),x(end)])
+ylim([0,22])
+%==========================================================================
+
+nexttile
+hold on
+x=day0+(tmstep:tmstep:tmstep*num_times);
+for e=1:height(Scan)
+    temp=Scan.Pos{e,1}-Scan.Pos2{e,1};
+    temp=temp(Burntime:end,:);
+    temp=sum(temp,1);
+    M=mean(temp);
+     M95=prctile(temp,90,2);
+     M05=prctile(temp,10,2);
+     errorbar(e,M,M95-M,M-M05,Color=colors{e},LineWidth=2,Marker="o")
+%     Std=std(temp);
+%     errorbar(e,M,Std,Color=colors{e},LineWidth=2,Marker="o")
+end
+plot(0:0.1:6,(0:0.1:6)*0,':k','LineWidth',1)
+
+xlabel('Parameter-Set')
+ylabel('Total difference')
+title('Difference')
+set(gca,'FontSize',16,'FontName','Times New Roman' )
+xlim([0,e+1])
+%==========================================================================
+set(gcf,'position',[0,100,1300,500])
